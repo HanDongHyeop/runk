@@ -1573,7 +1573,7 @@ html,body{margin:0;padding:0;background:#000;height:100%;overflow:hidden;touch-a
 
 /* 빌드 스탬프 — 화면/콘솔에서 **지금 돌고 있는 코드가 최신인지** 즉시 확인용.
    "고쳤는데 그대로예요" 같은 상황의 90%는 낡은 탭이다. 코드를 고치면 이 값을 올린다. */
-const BUILD = '2026-10-14a';
+const BUILD = '2026-10-14b';
 window.__build = BUILD;
 console.log('%cRUNK build ' + BUILD, 'color:#ffe32b;font-weight:bold');
 
@@ -7237,47 +7237,143 @@ function buildStaticSea(c,open){
   const deep=(x,y)=> deep0(x,y) && sea[y*L.W+x]===1;
   c.fillStyle='rgba(0,6,18,0.32)';
   for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-    if(L.grid[y][x]!==1 || skip(x,y)) continue;
-    if(deep(x,y)) c.fillRect(x*ts, y*ts, ts, ts);
-    else c.drawImage(tShell, x*ts, y*ts, ts, ts);
+    if(L.grid[y][x]===1 && !skip(x,y) && deep(x,y)) c.fillRect(x*ts, y*ts, ts, ts);
   }
+  /* ★[2026-10-14 사용자 선택: 시안 E3] 길 쪽 가장자리 = **깎인 바위 턱 + 작은 자갈 + 가끔 따개비**.
+     · 충돌은 그대로(칸 경계). 그림만 칸 안쪽으로 최대 ~18% 들쭉날쭉 깎는다(계단식 = 도트 느낌).
+     · 꼭짓점 깊이는 **꼭짓점 좌표 해시**라 이웃 칸과 이음매 없이 이어지고, 안쪽 모서리는 대각 칸을 계단으로 깎아 잇는다.
+     · 색은 전부 wallColor()에서 유도 → 에디터 테마 색(또는 def.wallColor)을 바꾸면 턱·자갈 색도 같이 바뀐다.
+     · 해초·말미잘·산호 장식은 넣지 않는다(말미잘 기믹과 헷갈림 — 사용자 지적). */
+  const VX=i=>Math.round(i*ts);
+  const P=Math.max(1,Math.round(ts/18));                         // 도트 한 칸
+  const qz=v=>Math.max(P,Math.round(v/P)*P);
+  const lseed=(typeof levelIdx==='number'?levelIdx:0)+1;
+  const hh=(a,b2,k)=>{ let n=Math.imul(a+11,73856093)^Math.imul(b2+7,19349663)^Math.imul(k+3,83492791)^Math.imul(lseed,2654435761|0);
+    n=Math.imul(n^(n>>>13),1274126177); n^=n>>>16; return (n>>>0)/4294967296; };
+  const vd=(vx,vy,ax)=> qz(ts*0.07 + hh(vx,vy,ax)*ts*0.07);            // 꼭짓점 깊이(ax 0=가로변, 1=세로변)
+  const mine=(x,y)=> x>=0&&y>=0&&x<L.W&&y<L.H && L.grid[y][x]===1 && !skip(x,y) && !deep(x,y);
+  const e=Math.max(2,Math.round(ts*0.07)), lip=Math.max(2,Math.round(ts*0.09));
+  const wp=new Path2D(), eAll=new Path2D(), eTop=new Path2D(), eBot=new Path2D(), cracks=[], deco=[];
+  const addLine=(path,pts)=>{ path.moveTo(pts[0][0],pts[0][1]); for(let i=1;i<pts.length;i++) path.lineTo(pts[i][0],pts[i][1]); };
+  for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
+    if(!mine(x,y)) continue;
+    const X0=VX(x), X1=VX(x+1), Y0=VX(y), Y1=VX(y+1), S=X1-X0, SY=Y1-Y0;
+    const oT=open(x,y-1), oR=open(x+1,y), oB=open(x,y+1), oL=open(x-1,y);
+    if(!(oT||oR||oB||oL||open(x-1,y-1)||open(x+1,y-1)||open(x+1,y+1)||open(x-1,y+1))){ wp.rect(X0,Y0,S,SY); continue; }
+    // 변 위의 점: t=변을 따라 시계방향 거리, d=안쪽 깊이
+    const sideP=[(t,d)=>[X0+t,Y0+d],(t,d)=>[X1-d,Y0+t],(t,d)=>[X1-t,Y1-d],(t,d)=>[X0+d,Y1-t]];
+    const sideLen=[S,SY,S,SY], sideOpen=[oT,oR,oB,oL];
+    // 꼭짓점 TL·TR·BR·BL — [꼭짓점 x,y, 안쪽 부호 x,y, 가로변 열림, 세로변 열림, 대각 칸 열림]
+    const C=[[x,y,1,1,oT,oL,open(x-1,y-1)],[x+1,y,-1,1,oT,oR,open(x+1,y-1)],[x+1,y+1,-1,-1,oB,oR,open(x+1,y+1)],[x,y+1,1,-1,oB,oL,open(x-1,y+1)]];
+    const cornerPts=[];
+    for(let ci=0;ci<4;ci++){
+      const [vx,vy,sx,sy,oH,oV,dg]=C[ci], cx=VX(vx), cy=VX(vy), dh=vd(vx,vy,0), dv=vd(vx,vy,1);
+      if(oH||oV) cornerPts.push([[cx+sx*(oV?dv:0), cy+sy*(oH?dh:0)]]);
+      else if(dg){   // 안쪽 모서리: 대각 칸을 계단으로 깎아 양옆 칸의 턱과 잇는다
+        const A=[cx, cy+sy*dh], M=[cx+sx*dv, cy+sy*dh], B=[cx+sx*dv, cy];
+        const ch3=(ci===0||ci===2) ? [A,M,B] : [B,M,A];
+        cornerPts.push(ch3); addLine(eAll,ch3);
+      } else cornerPts.push([[cx,cy]]);
+    }
+    const ring=[];
+    for(let si=0;si<4;si++){
+      const cs=cornerPts[si]; for(const q of cs) ring.push(q);
+      if(!sideOpen[si]) continue;
+      // 열린 변 = 둥근 돌 덩어리가 이어진 턱. 깊이 = 두 꼭짓점 깊이 사이 + 볼록(바깥으로)·오목 덩어리 2~3개, 도트 칸(P) 단위 계단
+      const Ln=sideLen[si], st=cs[cs.length-1], en=cornerPts[(si+1)%4][0];
+      const ax=(si===0||si===2)?0:1, vS=C[si], vE=C[(si+1)%4];
+      const d0=vd(vS[0],vS[1],ax), d3=vd(vE[0],vE[1],ax);
+      const lumps=[], nl=2+(hh(x*4+si,y,5)<0.45?1:0);
+      const outS=sideOpen[(si+3)%4], outE=sideOpen[(si+1)%4];          // 이 변의 양 끝이 바깥 모서리인가
+      if(outS&&outE){ lumps.push([Ln/2, Ln/2, -(Math.min(d0,d3)-P)]); }   // 툭 튀어나온 칸 = 둥근 돌 하나(별 모양 방지)
+      else for(let k=0;k<nl;k++){ const cc=Ln*((k+0.5)/nl + (hh(x*4+si,y,6+k)-0.5)*0.18), ww=Ln*(0.16+hh(x*4+si,y,16+k)*0.12);
+        const out=hh(x*4+si,y,26+k)<0.68;                           // 대부분 바깥으로 볼록한 돌, 가끔 깎인 홈
+        lumps.push([cc, Math.min(ww,cc,Ln-cc), out? -ts*(0.05+hh(x,y,si+36+k)*0.05) : ts*(0.05+hh(x,y,si+46+k)*0.06)]); }
+      const prof=t=>{ let d=d0+(d3-d0)*(t/Ln);
+        for(const [cc,ww,amp] of lumps){ const u=(t-cc)/ww; if(Math.abs(u)<1) d+=amp*Math.sqrt(1-u*u); }
+        return Math.max(P, Math.min(ts*0.26, d)); };
+      const pts=[st]; let prevD=d0;
+      for(let t=P; t<Ln-P*0.5; t+=P){
+        const nd=(t+P>=Ln-P*0.5)? d3 : qz(prof(t+P*0.5));
+        if(nd!==prevD){ pts.push(sideP[si](t,prevD)); pts.push(sideP[si](t,nd)); prevD=nd; }
+      }
+      if(prevD!==d3){ pts.push(sideP[si](Ln-P,prevD)); pts.push(sideP[si](Ln-P,d3)); }
+      pts.push(en);
+      for(let k=1;k<pts.length-1;k++) ring.push(pts[k]);
+      addLine(eAll,pts); if(si===0) addLine(eTop,pts); if(si===2) addLine(eBot,pts);
+      const depthAt=t=>prof(t);
+      // 금(가끔): 턱에서 안쪽으로 꺾여 들어가는 짧은 선
+      if(hh(x*4+si,y,11)<0.3){ const t0=Math.round(Ln*(0.25+hh(x,y,si+20)*0.5)), d=depthAt(t0);
+        cracks.push([sideP[si](t0,d), sideP[si](t0+(hh(x,y,si+30)<0.5?-1:1)*P*2, d+ts*0.16), sideP[si](t0+P*3*(hh(x,y,si+40)<0.5?-1:1), d+ts*0.3)]); }
+      // 장식: 턱 바로 안쪽 띠에 자갈 0~3개 / 드물게 따개비 묶음(2~3개)
+      const nOpen=oT+oR+oB+oL, firstOpen=sideOpen.indexOf(true);
+      const r=(nOpen>=3 && si!==firstOpen) ? 1 : hh(x*4+si,y,13);   // 3면 이상 열린 작은 돌은 장식 한 면만(복작복작 방지)
+      if(r<0.08){ const t0=Ln*(0.3+hh(x,y,si+50)*0.4), n=hh(x,y,si+60)<0.5?2:3;
+        for(let k=0;k<n;k++){
+          const tt=t0+(k-1)*ts*0.15+hh(x,y,si+70+k)*ts*0.04, rr=ts*(0.065+hh(x,y,si+80+k)*0.025);
+          deco.push(['b', ...sideP[si](tt, depthAt(tt)+e+rr*1.1+(k%2)*ts*0.07), rr]); } }
+      else if(r<0.78){ const n= r<0.38?1: r<0.66?2:3;
+        for(let k=0;k<n;k++){
+          const tt=Ln*(0.14+((k+hh(x,y,si+90+k))/n)*0.72), rr=ts*(k===0? 0.09+hh(x,y,si+110)*0.045 : 0.06+hh(x,y,si+100+k)*0.03);
+          deco.push(['p', ...sideP[si](tt, depthAt(tt)+e*1.6+rr*1.2+hh(x,y,si+130+k)*ts*0.2), rr, hh(x,y,si+120+k)]); } }
+    }
+    wp.moveTo(ring[0][0],ring[0][1]); for(let i=1;i<ring.length;i++) wp.lineTo(ring[i][0],ring[i][1]); wp.closePath();
+  }
+  c.save(); c.clip(wp);
+  for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++) if(mine(x,y)) c.drawImage(tShell, VX(x), VX(y), VX(x+1)-VX(x), VX(y+1)-VX(y));
   { // 껍데기 띠의 바깥 가장자리(깊은 쪽·맵 끝) 윤곽
     const o=Math.max(2,Math.round(ts*0.06)), outer=(x,y)=> x<0||y<0||x>=L.W||y>=L.H || deep(x,y);
     c.fillStyle='rgba(4,8,18,0.62)';
     for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-      if(L.grid[y][x]!==1 || skip(x,y) || deep(x,y)) continue;
-      const px=x*ts, py=y*ts;
-      if(outer(x,y-1)) c.fillRect(px,py,ts,o);
-      if(outer(x,y+1)) c.fillRect(px,py+ts-o,ts,o);
-      if(outer(x-1,y)) c.fillRect(px,py,o,ts);
-      if(outer(x+1,y)) c.fillRect(px+ts-o,py,o,ts);
+      if(!mine(x,y)) continue;
+      const px=VX(x), py=VX(y), w=VX(x+1)-px, hgt=VX(y+1)-py;
+      if(outer(x,y-1)) c.fillRect(px,py,w,o);
+      if(outer(x,y+1)) c.fillRect(px,py+hgt-o,w,o);
+      if(outer(x-1,y)) c.fillRect(px,py,o,hgt);
+      if(outer(x+1,y)) c.fillRect(px+w-o,py,o,hgt);
     }
   }
-  const e=Math.max(2,Math.round(ts*0.07)), lip=Math.max(2,Math.round(ts*0.09));
-  c.fillStyle='rgba(4,8,18,0.72)';          // 윤곽(열린 면 쪽 테두리)
+  c.lineJoin='miter'; c.lineCap='butt';
+  c.strokeStyle=hexMul(col,0.55); c.lineWidth=P*1.5;                         // 금
+  for(const k of cracks){ c.beginPath(); c.moveTo(k[0][0],k[0][1]); c.lineTo(k[1][0],k[1][1]); c.lineTo(k[2][0],k[2][1]); c.stroke(); }
+  c.lineWidth=2*(e+Math.max(2,Math.round(ts*0.055))); c.strokeStyle=hexLite(col,0.3); c.stroke(eAll);   // 모든 길 쪽 면에 밝은 돌 테
+  c.lineWidth=2*(e+lip); c.strokeStyle=hexLite(col,0.45); c.stroke(eTop);    // 윗면은 더 밝고 두껍게(계단을 따라)
+  c.strokeStyle='rgba(0,0,0,0.28)'; c.stroke(eBot);                          // 아랫면 그늘
+  c.lineWidth=2*e; c.strokeStyle='rgba(4,8,18,0.72)'; c.stroke(eAll);        // 윤곽
+  c.restore();
+  // 벽 바로 밑 바닥에 떨어지는 옅은 그림자(깊이감) — 깎인 턱을 따라간다(벽 바깥에만)
+  c.save();
+  { const out=new Path2D(); out.rect(-ts,-ts,(L.W+2)*ts,(L.H+2)*ts); out.addPath(wp); c.clip(out,'evenodd'); }
+  c.lineWidth=2*Math.round(ts*0.12); c.strokeStyle='rgba(0,0,0,0.22)'; c.stroke(eBot);
+  c.restore();
+  c.fillStyle='rgba(0,0,0,0.22)';                                              // (복어·다트 등 다른 칸 밑은 예전처럼 곧은 그림자)
   for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-    if(L.grid[y][x]!==1 || skip(x,y)) continue;
-    const px=x*ts, py=y*ts;
-    if(open(x,y-1)) c.fillRect(px,py,ts,e);
-    if(open(x,y+1)) c.fillRect(px,py+ts-e,ts,e);
-    if(open(x-1,y)) c.fillRect(px,py,e,ts);
-    if(open(x+1,y)) c.fillRect(px+ts-e,py,e,ts);
-  }
-  c.fillStyle=hexLite(col,0.45);            // 윗면 밝은 턱
-  for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-    if(L.grid[y][x]!==1 || skip(x,y) || !open(x,y-1)) continue;
-    c.fillRect(x*ts, y*ts+e, ts, lip);
-  }
-  c.fillStyle='rgba(0,0,0,0.28)';           // 아랫면 그늘
-  for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-    if(L.grid[y][x]!==1 || skip(x,y) || !open(x,y+1)) continue;
-    c.fillRect(x*ts, y*ts+ts-e-lip, ts, lip);
-  }
-  // 벽 바로 밑 바닥에 떨어지는 옅은 그림자(깊이감)
-  c.fillStyle='rgba(0,0,0,0.22)';
-  for(let y=0;y<L.H;y++)for(let x=0;x<L.W;x++){
-    if(!open(x,y) || open(x,y-1)) continue;
+    if(!open(x,y) || open(x,y-1) || mine(x,y-1)) continue;
     c.fillRect(x*ts, y*ts, ts, Math.round(ts*0.12));
+  }
+  // 자갈·따개비 — 도트 타원(바깥 윤곽 → 몸 → 아래 그늘 → 하이라이트). 색은 벽 색에서 유도.
+  const mix=(h1,h2,t)=>{ const f=(hx,i)=>parseInt(hx.slice(1+i*2,3+i*2),16);
+    return '#'+[0,1,2].map(i=>Math.round(f(h1,i)*(1-t)+f(h2,i)*t).toString(16).padStart(2,'0')).join(''); };
+  const Q=1;                                                       // 장식은 캔버스 1px 단위(작은 돌이 네모로 뭉개지지 않게)
+  const ell=(cx,cy,rx,ry,fill)=>{ c.fillStyle=fill;
+    for(let yy=Math.round(cy-ry); yy<=cy+ry; yy+=Q){ const m=(yy+Q/2-cy)/ry; if(Math.abs(m)>1) continue;
+      const w=Math.round(rx*Math.sqrt(1-m*m)); if(w<=0) continue;
+      c.fillRect(Math.round(cx)-w, yy, 2*w, Q); } };
+  const lite=c2=>{ const f=i=>parseInt(c2.slice(1+i*2,3+i*2),16); return '#'+[0,1,2].map(i=>Math.round(f(i)+(255-f(i))*0.42).toString(16).padStart(2,'0')).join(''); };
+  const stone=mix(lite(col),'#c9b49c',0.5), barn=mix(col,'#e2d8c0',0.75);
+  for(const d of deco){
+    if(d[0]==='p'){ const [,cx,cy,r,v]=d, base= v<0.5? stone : mix(stone,col,0.35), rx=r, ry=r*0.82;
+      ell(cx,cy+0.5,rx+1.2,ry+1.2,'rgba(4,8,18,0.6)');
+      ell(cx,cy,rx,ry,base);
+      ell(cx,cy+ry*0.35,rx*0.8,ry*0.45,hexMul(base,0.78));
+      ell(cx-rx*0.3,cy-ry*0.35,rx*0.38,ry*0.3,hexLite(base,0.35));
+    } else { const [,cx,cy,r]=d;
+      ell(cx,cy+0.5,r+1.2,r+1.2,'rgba(4,8,18,0.65)');
+      ell(cx,cy,r,r,barn);
+      ell(cx,cy+r*0.3,r*0.85,r*0.5,hexMul(barn,0.82));
+      ell(cx,cy-r*0.05,r*0.42,r*0.42,hexMul(col,0.4));             // 가운데 구멍
+      ell(cx-r*0.45,cy-r*0.5,r*0.25,r*0.2,hexLite(barn,0.4));
+    }
   }
 }
 /* 심해 배경 — 화면 좌표에 매 프레임 깐다(정적 캔버스에 안 굽는 이유: 빛줄기·부유물이 움직인다).
